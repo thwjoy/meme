@@ -50,7 +50,7 @@ class MEME_BASE(nn.Module):
         self.pseudo_samples_b = nn.Parameter(pseudo_samples_b)
 
     def get_mixture_prior_params(self, samples):
-        return self.cond_prior.generative(samples)
+        return self.cond_prior(samples)
 
     def img_image_likelihood(self, pred, targ):
         scale = torch.ones_like(pred) * self.scale_val
@@ -60,14 +60,14 @@ class MEME_BASE(nn.Module):
         scale = torch.ones_like(pred) * self.scale_val
         return dist.Laplace(pred, scale).log_prob(targ).sum(dim=(-1))
 
-    def match(self, mode_a, mode_b, direction='bi'):
-        return self.run(mode_a, mode_b, direction, self.run_match)
+    def match(self, svhn_batch, mnist_batch, direction='bi'):
+        return self.run(svhn_batch, mnist_batch, direction, self.run_match)
 
-    def unsup(self, mode_a, mode_b, direction):
-        return self.run(mode_a, mode_b, direction, self.run_unsup)
+    def unsup(self, svhn_batch, mnist_batch, direction):
+        return self.run(svhn_batch, mnist_batch, direction, self.run_unsup)
 
     def classifier_loss_img(self, data, targ, likelihood, k=10, z_sample=None):
-        post_params = self.encoder.inference(data)
+        post_params = self.encoder(data)
         z = dist.Normal(*post_params).rsample([k])
         preds = self.classifier(z).view(-1, *targ.shape)
         targ_ = targ.unsqueeze(0).expand(k, *targ.shape)
@@ -86,12 +86,12 @@ class MEME_BASE(nn.Module):
     
     def run_match(self, data, targ, k=1):
         bs = data.shape[0]
-        post_params = self.encoder.inference(data)
+        post_params = self.encoder(data)
         z = dist.Normal(*post_params).rsample([k])
         pred  = self.classifier(z)
         log_qtz = self.likelihood_t(pred, targ)
 
-        c_prior_params = self.cond_prior.generative(targ)
+        c_prior_params = self.cond_prior(targ)
 
         kl = compute_kl(*post_params, *c_prior_params)
 
@@ -108,7 +108,7 @@ class MEME_BASE(nn.Module):
 
     def run_unsup(self, data, *args):
         bs = data.shape[0]
-        post_params = self.encoder.inference(data)
+        post_params = self.encoder(data)
         z = dist.Normal(*post_params).rsample()
 
         prior_params = self.get_mixture_prior_params(self.pseudo_samples[:bs])
@@ -146,10 +146,10 @@ class MEME_IMAGE_IMAGE(MEME_BASE):
             labs = []
             for i, (svhn, mnist, y) in enumerate(loader):
                 labs.append(y)
-                az = dist.Normal(*self.a_to_z.inference(svhn.to(device))).sample()
+                az = dist.Normal(*self.a_to_z(svhn.to(device))).sample()
                 enc_feats.append(az.cpu())
                 labs.append(y + 10)
-                bz = dist.Normal(*self.b_to_z.inference(mnist.to(device))).sample().cpu()
+                bz = dist.Normal(*self.b_to_z(mnist.to(device))).sample().cpu()
                 enc_feats.append(bz)
                 if i > 5:
                     break
@@ -183,17 +183,17 @@ class MEME_IMAGE_IMAGE(MEME_BASE):
             return {'latent': fig}
 
     def svhn_to_mnist(self, data):
-        z = dist.Normal(*self.a_to_z.inference(data)).sample()
+        z = dist.Normal(*self.a_to_z(data)).sample()
         return self.z_to_b(z)
 
     def mnist_to_svhn(self, img):
-        return self.z_to_a(dist.Normal(*self.b_to_z.inference(img)).sample())
+        return self.z_to_a(dist.Normal(*self.b_to_z(img)).sample())
 
     def svhn_to_svhn(self, img):
-        return self.z_to_a(dist.Normal(*self.a_to_z.inference(img)).sample())
+        return self.z_to_a(dist.Normal(*self.a_to_z(img)).sample())
 
     def mnist_to_mnist(self, img):
-        z = dist.Normal(*self.b_to_z.inference(img)).sample()
+        z = dist.Normal(*self.b_to_z(img)).sample()
         return self.z_to_b(z)
 
 class MEME_MNIST_SVHN(MEME_IMAGE_IMAGE):
@@ -210,9 +210,9 @@ class MEME_MNIST_SVHN(MEME_IMAGE_IMAGE):
 
         self.to(device)
 
-    def run(self, mode_a, mode_b, direction, fn):
-        if direction == 'a2b':
-            self.direction = 'a2b'
+    def run(self, svhn_batch, mnist_batch, direction, fn):
+        if direction == 's2m':
+            self.direction = 's2m'
             self.encoder = self.a_to_z
             self.decoder = self.z_to_a
             self.cond_prior = self.b_to_z
@@ -220,9 +220,9 @@ class MEME_MNIST_SVHN(MEME_IMAGE_IMAGE):
             self.likelihood_s = self.img_image_likelihood
             self.likelihood_t = self.img_vec_likelihood
             self.pseudo_samples = self.pseudo_samples_b
-            data, targ = mode_a, mode_b
-        elif direction == 'b2a':
-            self.direction = 'b2a'
+            data, targ = svhn_batch, mnist_batch
+        elif direction == 'm2s':
+            self.direction = 'm2s'
             self.encoder = self.b_to_z
             self.decoder = self.z_to_b
             self.cond_prior = self.a_to_z
@@ -230,14 +230,14 @@ class MEME_MNIST_SVHN(MEME_IMAGE_IMAGE):
             self.likelihood_s = self.img_vec_likelihood
             self.likelihood_t = self.img_image_likelihood
             self.pseudo_samples = self.pseudo_samples_a
-            data, targ = mode_b, mode_a
+            data, targ = mnist_batch, svhn_batch
         elif direction == 'bi':
-            loss_a2b = self.run(mode_a, mode_b, 'a2b', fn)
-            loss_b2a = self.run(mode_a, mode_b, 'b2a', fn)
-            return loss_b2a + loss_a2b
+            loss_s2m = self.run(svhn_batch, mnist_batch, 's2m', fn)
+            loss_m2s = self.run(svhn_batch, mnist_batch, 'm2s', fn)
+            return loss_m2s + loss_s2m
         elif direction == 'alt':
-            if self.direction == 'b2a':
-                return self.run(mode_a, mode_b, 'a2b', fn)
-            elif self.direction == 'a2b':
-                return self.run(mode_a, mode_b, 'b2a', fn)
+            if self.direction == 'm2s':
+                return self.run(svhn_batch, mnist_batch, 's2m', fn)
+            elif self.direction == 's2m':
+                return self.run(svhn_batch, mnist_batch, 'm2s', fn)
         return fn(data, targ)

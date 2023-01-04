@@ -97,13 +97,13 @@ def main(args):
             else:
                 data = next(unsup_iter)
 
-            mode_a = data[0].to(device)
-            mode_b = data[1].to(device)
+            svhn_batch = data[0].to(device)
+            mnist_batch = data[1].to(device)
 
             if is_supervised: 
                 num_sups += 1
 
-                loss = vae.match(mode_a=mode_a, mode_b=mode_b)
+                loss = vae.match(svhn_batch=svhn_batch, mnist_batch=mnist_batch)
                 loss.backward()
                 epoch_losses_sup += loss.detach().item()
    
@@ -111,17 +111,13 @@ def main(args):
                 num_unsups += 1
 
                 if args.missing is None:
-                    loss = vae.unmatch(mode_a=mode_a, mode_b=mode_b, direction=args.direction)
-                elif args.missing == 'b':
-                    loss = vae.unsup(mode_a=mode_a, mode_b=None, direction='a2b')
-                elif args.missing == 'a':
-                    loss = vae.unsup(mode_a=None, mode_b=mode_b, direction='b2a')
-                elif args.missing == 'ab':
-                    r = random()
-                    if r < 0.5:
-                        loss = vae.unsup(mode_a=None, mode_b=mode_b, direction='b2a')
-                    else:
-                        loss = vae.unsup(mode_a=mode_a, mode_b=None, direction='a2b')
+                    loss = vae.unmatch(svhn_batch=svhn_batch, mnist_batch=mnist_batch, direction=args.direction)
+                elif args.missing == 'mnist':
+                    loss = vae.unsup(svhn_batch=svhn_batch, mnist_batch=None, direction='s2m')
+                elif args.missing == 'svhn':
+                    loss = vae.unsup(svhn_batch=None, mnist_batch=mnist_batch, direction='m2s')
+                else:
+                    raise Exception("Modality %s not recognised" % args.missing)
 
                 epoch_losses_unsup += loss.detach().item()
                 loss.backward()
@@ -176,7 +172,7 @@ def parser_args(parser):
                         type=float, help="supervised fractional amount of the data i.e. "
                                          "how many of the images have supervised labels."
                                          "Should be a multiple of train_size / batch_size")
-    parser.add_argument('--missing', default=None, help='a|b a is SVHN missing, b is MNIST')
+    parser.add_argument('--missing', default=None, help='svhn|mnist')
     parser.add_argument('-zd', '--z_dim', default=64, type=int,
                         help="latent size")
     parser.add_argument('-lr', '--learning-rate', default=5e-4, type=float)
